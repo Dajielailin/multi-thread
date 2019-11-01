@@ -1,136 +1,180 @@
-	1. ThreadPool学习
-	i. __attribute__（guarded_by（数据成员））作用：
-		a. __attribute__可以设置函数属性（FunctionAttribute）、变量属性（Variable Attribute）和类型属性（Type Attribute）；
-		b. GUARDED_BY是一个应用在数据成员上的属性，它声明了数据成员被给定的监护权保护。对于数据的读操作需要共享的访问权限，而写操作需要独占的访问权限。
-		c. PT_GUARDED_BY与之类似，只不过它是为指针和智能指针准备的。对数据成员（指针）本身没有任何限制，它保护的是指针指向的数据。
-	ii. vector之push_back()和emplace_back()：
-		a. Push_back（）添加内容，调用了昂贵 临时对象的拷贝构造和销毁，增加了无意义的资源申请和释放操作，解决办法“转移”临时对象已经申请的资源给vector的成员，即将std::move(临时对象)，然后根据右值重载转移拷贝构造；
-		b. Emplace_back()则更进一步，直接在vector原地构造对象，比右值引用少了转移拷贝构造。
-	iii. 线程同步精要之wait()，notify()，notifyAll()方法：
-		a. 对象内部锁的调度问题，java中对象锁的模型：JVM会为一个使用内部锁（synchronized）的对象维护两个集合，Entry Set和Wait Set，也有人翻译为锁池和等待池；
-			i. 对于Entry Set：如果线程A已经持有了对象锁，此时如果有其他线程也想获得该对象锁的话，它只能进入Entry Set，并且处于线程的BLOCKED状态；
-			ii. 对于Entry Set中的线程，当对象锁被释放的时候，JVM会唤醒处于Entry Set中的某一个线程，这个线程的状态就从BLOCKED转变为RUNNABLE。
-			iii. 对于Wait Set：如果线程A调用了wait()方法，那么线程A会释放该对象的锁，进入到Wait Set，并且处于线程的WAITING状态；
-			iv. 对于Wait Set中的线程，当对象的notify()方法被调用时，JVM会唤醒处于Wait Set中的某一个线程，这个线程的状态就从WAITING转变为RUNNABLE，并且这个线程会从等待池转移到锁池；或者当notifyAll()方法被调用时，Wait Set中的全部线程会转变为RUNNABLE状态。所有Wait Set中被唤醒的线程会被转移到Entry Set中；
-			v. 然后，每当对象的锁被释放后，那些所有处于RUNNABLE状态的线程会共同去竞争获取对象的锁，最终会有一个线程（具体哪一个取决于JVM实现，队列里的第一个？随机的一个？）真正获取到对象的锁，而其他竞争失败的线程继续在Entry Set中等待下一次机会。
-		b. 注意多线程情况下使用notify()可能会导致死锁问题。 
-	iv. epoll之于select、poll:
-		a. select、poll只提供了一个接口：select或者poll函数，只支持水平触发模式——当文件描述符关联的内核缓冲区非空或者非满时，就会一直发出可读或者可写的就绪信号；
-		b. epoll提供了3个接口，既支持水平触发有支持边沿触发模式——只有当文件描述符关联的内核缓冲区由空变非空或者满变非满时，才会发出可读或者可写信号；
-			i. int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)，epoll的事件注册函数，它不同与select()是在监听事件时告诉内核要监听什么类型的事件，而是在这里先注册要监听的事件类型；
-	v. Muduo::net::Buffer内部实现：
-		a. writeIndex_：记录当前已经写入了buffer多少个字节；
-		b. readindex_：记录当前已经读取了多少个字节；
-		c. muduo的打包与分包：通过在消息前加上size_t类型的长度用来标识；
-		d. muduo实现多线程非阻塞ＣＳ读写文件的精要：
-			i. 使用buffer，server和client只需要填写或者取数据；
-			ii. 使用数据流前加长度标识，用以对数据进行打包和分包；
-	vi. Non-blocking IO核心思想：
-			i. 应用层避免阻塞在read()或write()或其他IO系统调用上，让一个线程能服务于多个socket链接；
-			ii. IO线程只能阻塞在IO multiplexing函数上，如select/poll/epoll_wait；
-			iii. 因此，应用层对每个TcpConnection开一个outputbuffer和inputbuffer是必须的：
-				1) Output buffer：应用层发送数据（通过TcpConnection::send()完成）过程中，无需关心数据分几次发送，网络库负责把数据完整的发送出去；
-					a) 在muduo框架里面，其实是客户端把数据写入output buffer，然后tcpConnection从output buffer读取数据并写入socket;
-				2) Input buffer：TcpConnection从socket读取数据，然后写入input buffer；客户端从input buffer读取数据；
-					a) 在muduo框架里，eventloop采用的是epoll level trigger，因此tcpConnection在处理“socket可读”事件时，必须一次性把socket里的数据读完,，然后不断写入input buffer，等构成一条完整信息后再通知程序的业务逻辑；
-	vii. IO流程中IO向量：struct iovec{ void* iov_base; size_t iov_len;}
-		a. 为了提高从磁盘读取数据到内存的效率，引入了IO向量机制，IO向量即struct iovec，在API接口在readv和writev中使用，当然其他地方也较多的使用它;
-		b. readv接口：从文件描述符fd所对应的的文件中读去count个数据段到多个buffers中，该buffer用iovec描述，原型：
-		ssize_t readv(int fd,const struct iovec *iov, int count);
-		c. writev接口：把count个数据buffer(使用iovec描述)写入到文件描述符fd所对应的的文件中，原型：
-		ssize_t writev(int fd,const struct iovec *iov, int count);
-	viii. __thread 关键字表示每一个线程有一份独立的实体，每一个线程都不会干扰；
-	ix.  __thread 只能修饰POD变量，简单的来说可以是如下几种变量：
-		a. 基本类型 (int , float 等等)；
-		b. 指针类型；
-		c. 不带自定义构造函数和析构函数的类，如果希望修饰带自定义构造和析构函数的类，需要用到指针。
-	x. Linux poll（）函数的用法：
-		a. 相对于select来说，poll 也是在指定时间内论询一定数量的文件描述符，来测试其中是否有就绪的，不过，poll 提供了一个易用的方法，来实现 i/o 复用；
-		b. 声明如下：
-			i. #include <poll.h>；
-			ii. int poll(struct pollfd *fds, nfds_t nfds, int timeout);    poll执行类似于select的任务：等待文件描述符集合中的其中一个准备好I/O；
-			iii. Return value:
-				1) 成功时，返回一个正值，表示revents字段非0的polldf数量；
-				2) 返回0值表示直到timeout，也没有文件描述符就绪；
-				3) 发生错误时，返回-1，彬设置对应的errno；
-			iv. 需要监测的描述符集合由参数fds指定，它的数据结构如下：
-			Struct pollfd{
-				Int fd;                     //包含一个已经打开的文件描述符
-				Short events;    //输入参数， 应用中通常用位模板指定事件；
-				Short revents;       //输出参数，由内核填写实际遇到的事件；revents可以包含任意events中指定的事件，或是POLLERR、POLLHUP、POLLNVAL三者之一；
-			}
-			v. 如果文件描述符集合中任意一个描述符都没有发生过其所请求的事件（且没有错误），则poll阻塞直至其中一个事件发生；
-			vi. 可以设置/返回的events和revents的bits定义在<poll.h>中：
-				1) POLLIN——有数据可读；
-				2) POLLPRI——紧急数据可读；
-				3) POLLOUT——现在写将不会阻塞；
-				4) POLLERR——错误条件；
-				5) POLLNVAL——非法请求：fd未打开（output only）;
-			
-			
-			
-			
-			
-			
-		
-		
-		
-	xi. Class ThreadPool {
-		 mutable MutexLock mutex_;
-		  Condition notEmpty_ GUARDED_BY(mutex_);
-		  Condition notFull_ GUARDED_BY(mutex_);
-		  string name_;
-		  Task threadInitCallback_;
-		  std::vector<std::unique_ptr<muduo::Thread>> threads_;
-		  std::deque<Task> queue_ GUARDED_BY(mutex_);
-		  size_t maxQueueSize_;
-		  bool running_;
+1. ThreadPool学习
+i. __attribute__（guarded_by（数据成员））作用：
+	a. __attribute__可以设置函数属性（FunctionAttribute）、变量属性（Variable Attribute）和类型属性（Type Attribute）；
+	b. GUARDED_BY是一个应用在数据成员上的属性，它声明了数据成员被给定的监护权保护。对于数据的读操作需要共享的访问权限，而写操作需要独占的访问权限。
+	c. PT_GUARDED_BY与之类似，只不过它是为指针和智能指针准备的。对数据成员（指针）本身没有任何限制，它保护的是指针指向的数据。
+ii. vector之push_back()和emplace_back()：
+	a. Push_back（）添加内容，调用了昂贵 临时对象的拷贝构造和销毁，增加了无意义的资源申请和释放操作，解决办法“转移”临时对象已经申请的资源给vector的成员，即将std::move(临时对象)，然后根据右值重载转移拷贝构造；
+	b. Emplace_back()则更进一步，直接在vector原地构造对象，比右值引用少了转移拷贝构造。
+iii. 线程同步精要之wait()，notify()，notifyAll()方法：
+	a. 对象内部锁的调度问题，java中对象锁的模型：JVM会为一个使用内部锁（synchronized）的对象维护两个集合，Entry Set和Wait Set，也有人翻译为锁池和等待池；
+		i. 对于Entry Set：如果线程A已经持有了对象锁，此时如果有其他线程也想获得该对象锁的话，它只能进入Entry Set，并且处于线程的BLOCKED状态；
+		ii. 对于Entry Set中的线程，当对象锁被释放的时候，JVM会唤醒处于Entry Set中的某一个线程，这个线程的状态就从BLOCKED转变为RUNNABLE。
+		iii. 对于Wait Set：如果线程A调用了wait()方法，那么线程A会释放该对象的锁，进入到Wait Set，并且处于线程的WAITING状态；
+		iv. 对于Wait Set中的线程，当对象的notify()方法被调用时，JVM会唤醒处于Wait Set中的某一个线程，这个线程的状态就从WAITING转变为RUNNABLE，并且这个线程会从等待池转移到锁池；或者当notifyAll()方法被调用时，Wait Set中的全部线程会转变为RUNNABLE状态。所有Wait Set中被唤醒的线程会被转移到Entry Set中；
+		v. 然后，每当对象的锁被释放后，那些所有处于RUNNABLE状态的线程会共同去竞争获取对象的锁，最终会有一个线程（具体哪一个取决于JVM实现，队列里的第一个？随机的一个？）真正获取到对象的锁，而其他竞争失败的线程继续在Entry Set中等待下一次机会。
+	b. 注意多线程情况下使用notify()可能会导致死锁问题。 
+iv. epoll之于select、poll:
+	a. select、poll只提供了一个接口：select或者poll函数，只支持水平触发模式——当文件描述符关联的内核缓冲区非空或者非满时，就会一直发出可读或者可写的就绪信号；
+	b. epoll提供了3个接口，既支持水平触发有支持边沿触发模式——只有当文件描述符关联的内核缓冲区由空变非空或者满变非满时，才会发出可读或者可写信号；
+		i. int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)，epoll的事件注册函数，它不同与select()是在监听事件时告诉内核要监听什么类型的事件，而是在这里先注册要监听的事件类型；
+v. Muduo::net::Buffer内部实现：
+	a. writeIndex_：记录当前已经写入了buffer多少个字节；
+	b. readindex_：记录当前已经读取了多少个字节；
+	c. muduo的打包与分包：通过在消息前加上size_t类型的长度用来标识；
+	d. muduo实现多线程非阻塞ＣＳ读写文件的精要：
+		i. 使用buffer，server和client只需要填写或者取数据；
+		ii. 使用数据流前加长度标识，用以对数据进行打包和分包；
+vi. Non-blocking IO核心思想：
+		i. 应用层避免阻塞在read()或write()或其他IO系统调用上，让一个线程能服务于多个socket链接；
+		ii. IO线程只能阻塞在IO multiplexing函数上，如select/poll/epoll_wait；
+		iii. 因此，应用层对每个TcpConnection开一个outputbuffer和inputbuffer是必须的：
+			1) Output buffer：应用层发送数据（通过TcpConnection::send()完成）过程中，无需关心数据分几次发送，网络库负责把数据完整的发送出去；
+				a) 在muduo框架里面，其实是客户端把数据写入output buffer，然后tcpConnection从output buffer读取数据并写入socket;
+			2) Input buffer：TcpConnection从socket读取数据，然后写入input buffer；客户端从input buffer读取数据；
+				a) 在muduo框架里，eventloop采用的是epoll level trigger，因此tcpConnection在处理“socket可读”事件时，必须一次性把socket里的数据读完,，然后不断写入input buffer，等构成一条完整信息后再通知程序的业务逻辑；
+vii. IO流程中IO向量：struct iovec{ void* iov_base; size_t iov_len;}
+	a. 为了提高从磁盘读取数据到内存的效率，引入了IO向量机制，IO向量即struct iovec，在API接口在readv和writev中使用，当然其他地方也较多的使用它;
+	b. readv接口：从文件描述符fd所对应的的文件中读去count个数据段到多个buffers中，该buffer用iovec描述，原型：
+	ssize_t readv(int fd,const struct iovec *iov, int count);
+	c. writev接口：把count个数据buffer(使用iovec描述)写入到文件描述符fd所对应的的文件中，原型：
+	ssize_t writev(int fd,const struct iovec *iov, int count);
+viii. __thread 关键字表示每一个线程有一份独立的实体，每一个线程都不会干扰；
+ix.  __thread 只能修饰POD变量，简单的来说可以是如下几种变量：
+	a. 基本类型 (int , float 等等)；
+	b. 指针类型；
+	c. 不带自定义构造函数和析构函数的类，如果希望修饰带自定义构造和析构函数的类，需要用到指针。
+x. Linux poll（）函数的用法：
+	a. 相对于select来说，poll 也是在指定时间内论询一定数量的文件描述符，来测试其中是否有就绪的，不过，poll 提供了一个易用的方法，来实现 i/o 复用；
+	b. 声明如下：
+		i. #include <poll.h>；
+		ii. int poll(struct pollfd *fds, nfds_t nfds, int timeout);    poll执行类似于select的任务：等待文件描述符集合中的其中一个准备好I/O；
+		iii. Return value:
+			1) 成功时，返回一个正值，表示revents字段非0的polldf数量；
+			2) 返回0值表示直到timeout，也没有文件描述符就绪；
+			3) 发生错误时，返回-1，彬设置对应的errno；
+		iv. 需要监测的描述符集合由参数fds指定，它的数据结构如下：
+		Struct pollfd{
+			Int fd;                     //包含一个已经打开的文件描述符
+			Short events;    //输入参数， 应用中通常用位模板指定事件；
+			Short revents;       //输出参数，由内核填写实际遇到的事件；revents可以包含任意events中指定的事件，或是POLLERR、POLLHUP、POLLNVAL三者之一；
 		}
-	xii. Class Thread{
-		  bool       started_;
-		  bool       joined_;
-		  pthread_t  pthreadId_;
-		  pid_t      tid_;
-		  ThreadFunc func_;
-		  string     name_;
-		  CountDownLatch latch_;
-		  static AtomicInt32 numCreated_;
-	}
-
+		v. 如果文件描述符集合中任意一个描述符都没有发生过其所请求的事件（且没有错误），则poll阻塞直至其中一个事件发生；
+		vi. 可以设置/返回的events和revents的bits定义在<poll.h>中：
+			1) POLLIN——有数据可读；
+			2) POLLPRI——紧急数据可读；
+			3) POLLOUT——现在写将不会阻塞；
+			4) POLLERR——错误条件；
+			5) POLLNVAL——非法请求：fd未打开（output only）;
 	
-	2. Reactor模式的c++实现：
-	i. One Loop per thread: 每个线程至多只有一个EventLoop对象，创建了EventLoop对象的线程就是IO线程；
-		a. EventLoop结构：
-		{
-			Pid_t threadId；
-			Vcetor<channel*> activeChannels;
-			Channel* currentChannel;
-			Unique_ptr<Poller> poller;
-			Void  loop();
-			Void updateChannel(channel*);
-		}
-	ii. reactor关键结构：最核心的事件分发机制——即将IO multiplexing (poll/epoll)拿到的IO事件(revents)分发到各个文件描述符（fd)的事件处理函数（channel::readCallback() or channel::writeCallback()）；
-		a. Channel结构
-		{
-			EvenvLoop* loop_;
-			Int fd_;
-			Int events_;
-			Int revents_;
-			Int pollFds_index;
-			setReadCallBack(Eventhandle);
-			setWriteCallBack(EventHandle);
-			
-		}
-		b. Poller结构：
-		{
-			EventLoop* loop_;
-			Map<fd, channel*> channels_;
-			Vector<pollfd> pollfds_;
-			Void poll(pollfds_.begin(), pollfds.size(), KtimeOut);
-		}
-		c. sa
+xi. Class ThreadPool {
+	 mutable MutexLock mutex_;
+	  Condition notEmpty_ GUARDED_BY(mutex_);
+	  Condition notFull_ GUARDED_BY(mutex_);
+	  string name_;
+	  Task threadInitCallback_;
+	  std::vector<std::unique_ptr<muduo::Thread>> threads_;
+	  std::deque<Task> queue_ GUARDED_BY(mutex_);
+	  size_t maxQueueSize_;
+	  bool running_;
+	}
+xii. Class Thread{
+	  bool       started_;
+	  bool       joined_;
+	  pthread_t  pthreadId_;
+	  pid_t      tid_;
+	  ThreadFunc func_;
+	  string     name_;
+	  CountDownLatch latch_;
+	  static AtomicInt32 numCreated_;
+}
+
+
+2. Reactor模式的c++实现：
+i. One Loop per thread: 每个线程至多只有一个EventLoop对象，创建了EventLoop对象的线程就是IO线程；
+	a. EventLoop结构：
+	{
+		Pid_t threadId；
+		Vcetor<channel*> activeChannels;
+		Channel* currentChannel;
+		Unique_ptr<Poller> poller;
+		Void  loop();
+		Void updateChannel(channel*);
+	}
+ii. reactor关键结构：最核心的事件分发机制——即将IO multiplexing (poll/epoll)拿到的IO事件(revents)分发到各个文件描述符（fd)的事件处理函数（channel::readCallback() or channel::writeCallback()）；
+	a. Channel结构
+	{
+		EvenvLoop* loop_;
+		Int fd_;
+		Int events_;
+		Int revents_;
+		Int pollFds_index;
+		setReadCallBack(Eventhandle);
+		setWriteCallBack(EventHandle);
 		
-	iii. 智能指针-scoped_ptr用法：
-		a. 模板实现里私有化了拷贝构造和赋值拷贝，因此scoped_ptr指向的对象不能共享和转移，它唯一拥有该动态分配的对象；
-		b. 通常用于把特定对象的生存周期限制在特定的作用域之内；
-		c. Scoped_ptr保证离开作用域后，它指向的对象自动销毁；也可以提前销毁（ptr.reset()）;
+	}
+	b. Poller结构：
+	{
+		EventLoop* loop_;
+		Map<fd, channel*> channels_;
+		Vector<pollfd> pollfds_;
+		Void poll(pollfds_.begin(), pollfds.size(), KtimeOut);
+	}
+	
+iii. EventLoopThread class：IO线程不一定是主线程，一个程序也可以有不止一个IO线程，并不违反one loop per thread本意：
+	a. 结构：
+	Class EventLoopThread
+	{
+		EventLoop* loop_;
+		Thread thread_;
+		Condition cond_;
+		Std::function<void(EventLoop*)> callback_;
+	 }
+	b. 特点：
+		i. 对外接口，startLoop()——调用thread(threadFunc()， name);——开启一个线程，线程里创建同生命周期的EventLoop；
+		ii. 在threadFunc（）里面定义stack上EventLoop对象，通过notify()条件变量，唤醒startLoop()；
+		iii. 上述EventLoop的生命周期与新线程主函数的作用域相同；
+	
+iv. 智能指针-scoped_ptr用法：
+	a. 模板实现里私有化了拷贝构造和赋值拷贝，因此scoped_ptr指向的对象不能共享和转移，它唯一拥有该动态分配的对象；
+	b. 通常用于把特定对象的生存周期限制在特定的作用域之内；
+	c. Scoped_ptr保证离开作用域后，它指向的对象自动销毁；也可以提前销毁（ptr.reset()）; 
+v. 智能指针-unique_ptr、shared_ptr和weak_ptr：
+	a. Unique_ptr：持有对象的所有权，同一时刻只能有一个unique_ptr指向一个给定对象（禁止拷贝语义，支持移动语义实现）；
+	b. Unique_ptr的生命周期与所在的作用域有关；
+	c. Weak_ptr：不拥有对象的所有权，但可以通过lock()方法构造shared_ptr，从而获取对象的所有权；
+vi. TimerQueue定时器实现：
+	a. TimeQueue结构：
+	{
+		Set<pair<Timestamp, Timer*>> timers_;
+		Loop_;
+		Const int timerfd_;
+		Channel timerfdChannel_;
+	}
+	b. Linux下的定时器接口——timerfd:
+		i. 定义：该接口基于文件描述符，通过文件描述符的可读事件进行超时通知，所以能够被用于select\poll的场景；
+		ii. 创建文件描述符：timerfd_create(clockId, 控制标志)——生成一个定时器对象，并返回一个文件描述符：
+			1) clockId: CLOCK_REATIME 或者 CLOCK_MONOTONIC：
+				a) CLOCK_REATIME：相对时间，从1970.1.1到目前的时间；
+				b) CLOCK_MONOTONIC：绝对时间，从系统重启到现在的时间；
+			2) 控制标志：TFD_NONBLOCK 或者 TFD_CLOEXEC;
+		iii. 启动或停止定时器——timerfd_settime(CLOCK_REATIME | CLOCK_MONOTONIC, flags, 超时时间， NULL )：
+			1) flags：
+				a) 0-相对定时器，超时时间设为相对时间；
+				b) TFD_TIMER_ABSTIME-绝对定时器，后面的时间需要用clock_gettime来获取；
+				c) 如何获取超时间（超时时间为0，则表示停止定时器）：
+					i) 通过接口：Clocl_gettime(CLOCK_REALTIME, timespec*)——获取当前时间;
+					ii) 通过数据结构：
+					Struct timespec
+					{
+						Time_t tc_sec;
+						Long tv_nsec;
+					}
+					Struct itimerspec
+					{
+						Struct timespec it_interval;   //后续周期性超时时间；
+						Struct timespec it_value;        //首次超时时间 = clock_gettime() + 需要超时时间；
+					}
+		iv. 读timerfd的超时次数：
+			1) Size_t Read(timerfd, uint64_t howmany, sizeof uint64_t);
+			2) 出参——howmany；
