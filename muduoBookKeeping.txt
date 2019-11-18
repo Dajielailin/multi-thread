@@ -142,8 +142,14 @@ iv. 智能指针-scoped_ptr用法：
 v. 智能指针-unique_ptr、shared_ptr和weak_ptr：
 	a. Unique_ptr：持有对象的所有权，同一时刻只能有一个unique_ptr指向一个给定对象（禁止拷贝语义，支持移动语义实现）；
 	b. Unique_ptr的生命周期与所在的作用域有关；
-	c. Weak_ptr：不拥有对象的所有权，但可以通过lock()方法构造shared_ptr，从而获取对象的所有权；
-vi. TimerQueue定时器实现：
+	c. Shared_ptr：shared_ptr的引用计数对象是在创建shared_ptr自身时创建的；
+	d. Weak_ptr: 一种智能指针，拥有一个由shared_ptr管理的对象的弱引用；weak_ptr必须转换成shared_ptr才能获得该对象的短暂拥有权限，因此该对象的生命期直到这个“临时的shared_ptr”销毁才结束，而shared_ptr的引用计数对象此时才释放；
+	e. Weak_ptr：不拥有对象的所有权，但可以通过lock()方法构造shared_ptr，从而获取对象的所有权；
+vi. Shared_ptr<T>之与enable_shared_from_this<T>:
+	a. 应用场景：保证类T的异步回调函数中this指向的对象有效；
+	b. 如果shared_ptr 管理者一个T类型的对象t，且T继承了boost::enbale_shared_from_this<T>，那么T就拥有个shared_from_this()成员函数，它同样返回一个指向对象t的shared_ptr指针；
+	c. T::shared_from_this() == t，原理：std::enable_shared_from_this<T>包含了一个std::weak_ptr<T>指针，通过weak_ptr<T>构造临时shared_ptr<T>来延长对象的生命周期。
+vii. TimerQueue定时器实现：
 	a. TimeQueue结构：
 	{
 		Set<pair<Timestamp, Timer*>> timers_;
@@ -151,7 +157,7 @@ vi. TimerQueue定时器实现：
 		Const int timerfd_;
 		Channel timerfdChannel_;
 	}
-vii. Linux下的定时器接口——timerfd:
+viii. Linux下的定时器接口——timerfd:
 	a. 定义：该接口基于文件描述符，通过文件描述符的可读事件进行超时通知，所以能够被用于select\poll的场景；
 	b. 创建文件描述符：timerfd_create(clockId, 控制标志)——生成一个定时器对象，并返回一个文件描述符：
 		i. clockId: CLOCK_REATIME 或者 CLOCK_MONOTONIC：
@@ -178,7 +184,7 @@ vii. Linux下的定时器接口——timerfd:
 	d. 读timerfd的超时次数：
 		i. Size_t Read(timerfd, uint64_t howmany, sizeof uint64_t);
 		ii. 出参——howmany；
-viii. Linux下的read(3)和write(3)接口：
+ix. Linux下的read(3)和write(3)接口：
 	a. Ssize_t write(int fd, const void* buf, size_t count)：
 		i. write(3)会把参数buf所指的内存写入count个字节到参数fd所指的文件内；
 		ii. 如果顺利write()会返回实际写入的字节数，当有错误发生时返回-1，错误代码存入errno中；
@@ -189,7 +195,7 @@ viii. Linux下的read(3)和write(3)接口：
 			1) 如果是常规文件，读到多少都会返回；
 			2) 从终端读取不一定阻塞：如果从终端输入的数据没有换行符，则调用read读终端设备会阻塞；
 			3) 从网络设备不一定阻塞：从网络上没有接受到数据包，调用read会阻塞；
-ix. linux下的eventfd——int eventfd(unsigned int initval, int flags):
+x. linux下的eventfd——int eventfd(unsigned int initval, int flags): 
 	a. 创建一个eventfd对象用于事件通知，可以由用户空间应用程序实现事件等待/通知机制；
 	b. 参数initval初始化该fd包含的由内核维护的而无符号64位整数计数器 count;
 	c. flags可以是以下值的OR运算结果，用以改变eventfd的行为；
@@ -199,9 +205,11 @@ ix. linux下的eventfd——int eventfd(unsigned int initval, int flags):
 		iv. Read(3)读取eventfd：读取8字节，如果当前count > 0, 则返回count值，并重置count为0；否则阻塞至count > 0;
 		v. Write(3)写入eventfd：写入一个8字节的整数value加到count上；
 		vi. Close()：关闭文件描述符，eventfd对象引用计数减1，若减为0，则释放eventfd对象；
-x. EventLoop::runInLoop(const Functor& cb)——让IO线程非阻塞执行用户回调：（不需要加锁）
+xi. EventLoop::runInLoop(const Functor& cb)——让IO线程非阻塞执行用户回调：（不需要加锁）
 	a. 如果用户在当前线程调用回调cb，则会立马同步执行；
 	b. 如果用户在其他线程通过runInLoop执行回调cb，则EventLoop会先将cb加入任务队列——pendingFunctors，然后：
 		i. 此时IO线程一般是阻塞在事件循环EventLoop::loop()的poll(2)调用上，为了能让IO线程立即执行用户回调，需要设法唤醒IO线程；
 		ii. EventLoop::wakeupChannel_通过poll(2)监听了eventfd上的readable事件，EventLoop初始化了eventfd(0, EFD_NONBLOCK)，此时read(eventfd)会阻塞至write(eventfd);
 		iii. runInLoop正是通过wakeup()函数间接调用了write(eventfd)，因此EventLoop::loop()里的poll(2)监听到了eventfd上的read(3)就绪，poll(2)不再阻塞，继续往下执行doPendingFunctors()，最终用户回调得以立马执行；
+xii. sockaddr和sockaddr_in详解：
+	a. https://blog.csdn.net/qingzhuyuxian/article/details/79736821；
